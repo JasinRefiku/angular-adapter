@@ -536,6 +536,7 @@ export async function* runBuilder(
         createInternalAngularBuilder(externals, {
           instrumentForCoverage: nfBuilderOptions.instrumentForCoverage,
           define: nfBuilderOptions.define,
+          externalsPlugin: !activateSsr,
         }),
         context,
         nfBuilderOptions.skipHtmlTransform
