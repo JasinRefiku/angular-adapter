@@ -94,11 +94,41 @@ function readFederationTsConfig(
     federationTsConfig
   );
 
+  // Defaults are resolved from the leaf config's directory, which is now the cache dir.
+  const typeRoots = ts.getEffectiveTypeRoots(options, ts.sys) ?? [];
+
   return {
     ownFiles,
-    // Defaults are resolved from the leaf config's directory, which is now the cache dir.
-    typeRoots: ts.getEffectiveTypeRoots(options, ts.sys) ?? [],
+    typeRoots: options.typeRoots
+      ? typeRoots
+      : withNodeModulesFallback(ts, options, federationTsConfig, typeRoots),
   };
+}
+
+// Pinned typeRoots turn off TypeScript's node_modules fallback for `types` entries, through which
+// packages shipping their own typings (e.g. @angular/localize) resolve (#166). Only if an entry
+// needs it, the node_modules folders that fallback walks follow the @types roots, nearest first.
+// Not next to `*`, which would take every package in them as a type library.
+function withNodeModulesFallback(
+  ts: typeof TypeScript,
+  options: TypeScript.CompilerOptions,
+  federationTsConfig: string,
+  defaultTypeRoots: string[]
+): string[] {
+  const types = options.types ?? [];
+  const needsFallback =
+    !types.includes('*') &&
+    types.some(
+      name =>
+        !ts.isExternalModuleNameRelative(name) &&
+        // Resolved as the federation tsconfig's own program would, from its directory.
+        ts.resolveTypeReferenceDirective(name, federationTsConfig, options, ts.sys)
+          .resolvedTypeReferenceDirective?.primary === false
+    );
+
+  return needsFallback
+    ? [...defaultTypeRoots, ...defaultTypeRoots.map(root => path.dirname(root))]
+    : defaultTypeRoots;
 }
 
 function hashOf(value: string): string {

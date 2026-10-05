@@ -24,6 +24,15 @@ function parse(configPath: string) {
   return ts.parseJsonConfigFileContent(config, ts.sys, path.dirname(configPath), {}, configPath);
 }
 
+// What Angular's compiler plugin would report for a program built from the generated config.
+function diagnose(configPath: string): string[] {
+  const { fileNames, options } = parse(configPath);
+  const program = ts.createProgram(fileNames, options);
+  return ts
+    .getPreEmitDiagnostics(program)
+    .map(d => `TS${d.code}: ${ts.flattenDiagnosticMessageText(d.messageText, '\n')}`);
+}
+
 const posix = (p: string) => p.replace(/\\/g, '/');
 
 describe('writeContextTsConfig', () => {
@@ -181,6 +190,90 @@ describe('writeContextTsConfig', () => {
     expect(parse(written).options.typeRoots).toEqual([
       posix(path.join(ws, 'projects/mfe1/custom-types')),
     ]);
+  });
+
+  describe('type libraries in `types`', () => {
+    // A package that ships its own typings, like @angular/localize: not under @types.
+    const selfTyped = (dir: string) => {
+      touch(
+        ws,
+        `${dir}/@acme/localize/package.json`,
+        JSON.stringify({ name: '@acme/localize', typings: './types/localize.d.ts' })
+      );
+      touch(
+        ws,
+        `${dir}/@acme/localize/types/localize.d.ts`,
+        'declare function $localize(parts: TemplateStringsArray): string;'
+      );
+    };
+
+    const useTypes = (compilerOptions: object) =>
+      touch(
+        ws,
+        'projects/mfe1/tsconfig.app.json',
+        JSON.stringify({ compilerOptions: { skipLibCheck: true, ...compilerOptions } })
+      );
+
+    const onlyAtTypesRoots = (written: string) =>
+      parse(written).options.typeRoots!.every(root => root.endsWith('/@types'));
+
+    const writeUsing = (global: string) => {
+      touch(ws, 'projects/mfe1/src/bootstrap.ts', `export const text: string = ${global};`);
+      return write('mapping-or-exposed', [entry('./projects/mfe1/src/bootstrap.ts')]);
+    };
+
+    // #166: pinned typeRoots turn off TypeScript's node_modules fallback for these.
+    it('resolves a package that ships its own typings', () => {
+      selfTyped('node_modules');
+      useTypes({ types: ['@acme/localize'] });
+
+      expect(diagnose(writeUsing('$localize`hi`'))).toEqual([]);
+    });
+
+    // The fallback walks up from the federation tsconfig, not from the cache dir.
+    it("resolves it from the federation tsconfig's own node_modules", () => {
+      selfTyped('projects/mfe1/node_modules');
+      useTypes({ types: ['@acme/localize'] });
+
+      expect(diagnose(writeUsing('$localize`hi`'))).toEqual([]);
+    });
+
+    it('leaves the type roots alone when every entry resolves from them', () => {
+      touch(ws, 'node_modules/@types/acme-env/index.d.ts', 'declare const ACME_ENV: string;');
+      touch(
+        ws,
+        'projects/mfe1/node_modules/@types/acme-local/index.d.ts',
+        'declare const ACME_LOCAL: string;'
+      );
+      useTypes({ types: ['acme-env', 'acme-local'] });
+
+      const written = writeUsing('ACME_ENV + ACME_LOCAL');
+
+      expect(diagnose(written)).toEqual([]);
+      expect(onlyAtTypesRoots(written)).toBe(true);
+    });
+
+    // `*` takes every folder in every type root, so a node_modules root would pull in all packages.
+    it('adds no node_modules type roots next to the "*" wildcard', () => {
+      selfTyped('node_modules');
+      useTypes({ types: ['*', '@acme/localize'] });
+
+      const written = writeUsing('$localize`hi`');
+
+      expect(onlyAtTypesRoots(written)).toBe(true);
+    });
+
+    // With explicit typeRoots TypeScript skips the fallback for the federation tsconfig too.
+    it('keeps explicit typeRoots as they are', () => {
+      selfTyped('node_modules');
+      useTypes({ types: ['@acme/localize'], typeRoots: ['./custom-types'] });
+
+      const written = writeUsing('$localize`hi`');
+
+      expect(parse(written).options.typeRoots).toEqual([
+        posix(path.join(ws, 'projects/mfe1/custom-types')),
+      ]);
+    });
   });
 
   it('does not rewrite the file when its content is unchanged', () => {
