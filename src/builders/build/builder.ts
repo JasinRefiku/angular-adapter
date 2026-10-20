@@ -294,11 +294,13 @@ export async function* runBuilder(
   // syncNfFileWatcher calls below a no-op) so the linked lib's real source is watched.
   const linkedDirs = linkedSharedDirs(normalized.config, normalized.options);
 
+  const useExternalsPlugin = !activateSsr;
+
   const plugins = [
     {
       name: "externals",
       setup(build: PluginBuild) {
-        if (!activateSsr && build.initialOptions.platform !== "node") {
+        if (useExternalsPlugin && build.initialOptions.platform !== "node") {
           build.initialOptions.external = externals.filter(
             (e) => e !== "tslib",
           );
@@ -536,7 +538,7 @@ export async function* runBuilder(
         createInternalAngularBuilder(externals, {
           instrumentForCoverage: nfBuilderOptions.instrumentForCoverage,
           define: nfBuilderOptions.define,
-          externalsPlugin: !activateSsr,
+          externalsPlugin: useExternalsPlugin,
         }),
         context,
         nfBuilderOptions.skipHtmlTransform

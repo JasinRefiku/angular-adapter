@@ -50,9 +50,16 @@ export const createInternalAngularBuilder =
     // its Sass partials (#167). Leave them out of the build when the `externals` plugin covers the
     // browser bundle and there is no server bundle: server bundles, their polyfills and the
     // ngServerMode banner Angular adds for externals only get them from here.
+    // A proxy, not a copy: normalizeOptions writes its `ssr`/`prerender` corrections back onto the
+    // options, and serveWithVite reads them from `options`.
     const buildOptions =
       opts?.externalsPlugin && !options.server
-        ? { ...options, externalDependencies: targetExternals }
+        ? new Proxy(options, {
+            get: (target, key, receiver) =>
+              key === "externalDependencies"
+                ? targetExternals
+                : Reflect.get(target, key, receiver),
+          })
         : options;
 
     // Todo: share cache with Angular builder: https://github.com/angular/angular-cli/pull/32527

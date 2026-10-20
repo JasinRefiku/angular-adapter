@@ -103,6 +103,31 @@ describe("createInternalAngularBuilder", () => {
       expect(served.define).toEqual({ BUILD_ID: "'cli'", KEEP: "true" });
     });
 
+    // Angular's normalizeOptions writes its corrections back onto the options it gets
+    // (`ssr = false` and `prerender = !!server` when `outputMode` is set without `server`), and
+    // serveWithVite picks its SSR middleware from the served options' `ssr` afterwards.
+    it("lets Angular's option corrections reach the served options", () => {
+      vi.mocked(buildApplicationInternal).mockImplementationOnce((options) => {
+        options.ssr = false;
+        options.prerender = false;
+        return (async function* () {})();
+      });
+
+      const { build, served } = runBoth(
+        {
+          externalDependencies: ["fs"],
+          outputMode: "static" as Options["outputMode"],
+          ssr: true,
+        },
+        { externalsPlugin: true },
+      );
+
+      expect(served.ssr).toBe(false);
+      expect(served.prerender).toBe(false);
+      expect(build.externalDependencies).toEqual(["fs"]);
+      expect(served.externalDependencies).toEqual(["fs", "@angular/core"]);
+    });
+
     // Server bundles and their polyfills don't run the plugin, and Angular only adds the
     // `ngServerMode` banner for externals when externalDependencies is set.
     it("keeps the federation externals in the build when there is a server bundle", () => {
