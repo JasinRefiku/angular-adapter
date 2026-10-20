@@ -139,6 +139,34 @@ describe("createInternalAngularBuilder", () => {
       expect(build.externalDependencies).toEqual(["fs", "@angular/core"]);
       expect(served.externalDependencies).toEqual(["fs", "@angular/core"]);
     });
+
+    // A local polyfill file turns off `externalPackages` for the whole polyfills bundle, and
+    // code plugins don't reach that bundle, so externalDependencies is all that keeps a shared
+    // package imported from `polyfills.ts` external. (`ng build` inlines it, since its
+    // externals only come from the plugin.)
+    it.each(["src/polyfills.ts", "./src/polyfills", "src/polyfills.mjs"])(
+      "keeps the federation externals in the build for the local polyfill %s",
+      (polyfill) => {
+        const { build } = runBoth(
+          { externalDependencies: ["fs"], polyfills: ["zone.js", polyfill] },
+          { externalsPlugin: true },
+        );
+
+        expect(build.externalDependencies).toEqual(["fs", "@angular/core"]);
+      },
+    );
+
+    it("treats package polyfills, zone.js included, as non-local", () => {
+      const { build } = runBoth(
+        {
+          externalDependencies: ["fs"],
+          polyfills: ["zone.js", "zone.js/testing", "@angular/localize/init"],
+        },
+        { externalsPlugin: true },
+      );
+
+      expect(build.externalDependencies).toEqual(["fs"]);
+    });
   });
 
   // A federated SSR build (`ssr` without `dev`) turns the plugin off, so the browser bundle
