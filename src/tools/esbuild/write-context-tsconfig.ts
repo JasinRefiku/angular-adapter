@@ -51,16 +51,23 @@ export function writeContextTsConfig(options: ContextTsConfigOptions): string {
     ),
   ].map(toPosix);
 
+  const contextDir = path.join(cacheDir, 'tsconfig');
   const contextTsConfig = path.join(
-    cacheDir,
-    'tsconfig',
+    contextDir,
     `${hashOf(federationTsConfig)}.${bundleName.replace(/[^A-Za-z0-9._-]/g, '_')}.json`
   );
+
+  // TypeScript loads an absolute `types` entry only through a type root that exists on disk.
+  const typeRoots =
+    federation.types?.some(type => path.isAbsolute(type)) &&
+    !federation.typeRoots.some(root => fs.existsSync(root))
+      ? [...federation.typeRoots, contextDir]
+      : federation.typeRoots;
 
   const content = JSON.stringify(
     {
       extends: toPosix(federationTsConfig),
-      compilerOptions: { typeRoots: federation.typeRoots.map(toPosix) },
+      compilerOptions: { typeRoots: typeRoots.map(toPosix), types: federation.types?.map(toPosix) },
       files,
     },
     null,
@@ -68,7 +75,7 @@ export function writeContextTsConfig(options: ContextTsConfigOptions): string {
   );
 
   if (!fs.existsSync(contextTsConfig) || fs.readFileSync(contextTsConfig, 'utf-8') !== content) {
-    fs.mkdirSync(path.dirname(contextTsConfig), { recursive: true });
+    fs.mkdirSync(contextDir, { recursive: true });
     fs.writeFileSync(contextTsConfig, content);
   }
 
@@ -78,7 +85,7 @@ export function writeContextTsConfig(options: ContextTsConfigOptions): string {
 function readFederationTsConfig(
   workspaceRoot: string,
   federationTsConfig: string
-): { ownFiles: boolean; typeRoots: string[] } {
+): { ownFiles: boolean; typeRoots: string[]; types?: string[] } {
   // The workspace's compiler, the one Angular builds with; the adapter ships none.
   const ts: typeof TypeScript = createRequire(path.join(workspaceRoot, 'package.json'))(
     'typescript'
@@ -94,41 +101,28 @@ function readFederationTsConfig(
     federationTsConfig
   );
 
-  // Defaults are resolved from the leaf config's directory, which is now the cache dir.
-  const typeRoots = ts.getEffectiveTypeRoots(options, ts.sys) ?? [];
-
   return {
     ownFiles,
-    typeRoots: options.typeRoots
-      ? typeRoots
-      : withNodeModulesFallback(ts, options, federationTsConfig, typeRoots),
+    // Defaults are resolved from the leaf config's directory, which is now the cache dir.
+    typeRoots: ts.getEffectiveTypeRoots(options, ts.sys) ?? [],
+    types: resolveTypes(ts, options, federationTsConfig),
   };
 }
 
-// Pinned typeRoots turn off TypeScript's node_modules fallback for `types` entries, through which
-// packages shipping their own typings (e.g. @angular/localize) resolve (#166). Only if an entry
-// needs it, the node_modules folders that fallback walks follow the @types roots, nearest first.
-// Not next to `*`, which would take every package in them as a type library.
-function withNodeModulesFallback(
+// Pinned typeRoots turn off the node_modules fallback for `types`, so pass them resolved (#166).
+function resolveTypes(
   ts: typeof TypeScript,
   options: TypeScript.CompilerOptions,
-  federationTsConfig: string,
-  defaultTypeRoots: string[]
-): string[] {
-  const types = options.types ?? [];
-  const needsFallback =
-    !types.includes('*') &&
-    types.some(
-      name =>
-        !ts.isExternalModuleNameRelative(name) &&
-        // Resolved as the federation tsconfig's own program would, from its directory.
-        ts.resolveTypeReferenceDirective(name, federationTsConfig, options, ts.sys)
-          .resolvedTypeReferenceDirective?.primary === false
-    );
-
-  return needsFallback
-    ? [...defaultTypeRoots, ...defaultTypeRoots.map(root => path.dirname(root))]
-    : defaultTypeRoots;
+  federationTsConfig: string
+): string[] | undefined {
+  // What createProgram uses as the containing file for `types`.
+  const containingFile = path.join(path.dirname(federationTsConfig), '__inferred type names__.ts');
+  return options.types?.map(name =>
+    name === '*'
+      ? name
+      : (ts.resolveTypeReferenceDirective(name, containingFile, options, ts.sys)
+          .resolvedTypeReferenceDirective?.resolvedFileName ?? name)
+  );
 }
 
 function hashOf(value: string): string {
